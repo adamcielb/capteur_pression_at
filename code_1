@@ -8,116 +8,56 @@
 #define REG_CONTROL 0xF4
 #define REG_PRESS_MSB 0xF7
 
-int main() {#include <iostream>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <linux/i2c-dev.h>
-
-#define BMP280_ADDRESS 0x76
-#define REG_CONTROL 0xF4
-#define REG_PRESS_MSB 0xF7
-
 int main() {
     const char *device = "/dev/i2c-1";
     int file = open(device, O_RDWR);
     if (file < 0) {
-        std::cerr << "Failed to open the I2C bus\n";
+        std::cerr << "Échec de l'ouverture du bus I2C\n";
         return 1;
     }
 
     if (ioctl(file, I2C_SLAVE, BMP280_ADDRESS) < 0) {
-        std::cerr << "Failed to acquire bus access or talk to slave\n";
+        std::cerr << "Échec de l'accès au bus ou de la communication avec l'esclave\n";
         return 1;
     }
 
-    // Configure the BMP280: set oversampling and mode
-    char config[2] = {REG_CONTROL, 0x27};  // Normal mode, oversampling x1
+    // Configurer le BMP280 : définir l'oversampling et le mode
+    char config[2] = {REG_CONTROL, 0x27};  // Mode normal, oversampling x1
     if (write(file, config, 2) != 2) {
-        std::cerr << "Failed to configure the BMP280\n";
+        std::cerr << "Échec de la configuration du BMP280\n";
         return 1;
     }
 
-    for (int i = 0; i < 10; i++) {
-        // Wait for measurement to complete
+    // Variable pour le nombre de relevés
+    int nombreReleves = 15; // Changez cette valeur pour le nombre de relevés souhaité
+
+    for (int i = 0; i < nombreReleves; i++) {
+        // Attendre que la mesure soit terminée
         usleep(1000);
 
-        // Read pressure data
+        // Lire les données de pression
         char reg = REG_PRESS_MSB;
         if (write(file, &reg, 1) != 1) {
-            std::cerr << "Failed to set register pointer\n";
+            std::cerr << "Échec de la définition du pointeur de registre\n";
             return 1;
         }
 
         char data[6];
         if (read(file, data, 6) != 6) {
-            std::cerr << "Failed to read data from BMP280\n";
+            std::cerr << "Échec de la lecture des données du BMP280\n";
             return 1;
         }
 
-        // Combine data to calculate raw pressure
+        // Combiner les données pour calculer la pression brute
         int rawPressure = ((int)data[0] << 12) | ((int)data[1] << 4) | ((data[2] >> 4) & 0x0F);
 
-        // Convert to hPa (you may need to refine based on calibration)
+        // Convertir en hPa (vous devrez peut-être affiner en fonction de la calibration)
         double pressure = rawPressure / 25600.0;
 
-        // Display the result
+        // Afficher le résultat
         std::cout << "Relevé " << (i + 1) << ": Pression = " << pressure << " hPa" << std::endl;
 
-        // Pause 2 seconds before the next measurement
-        sleep(2);
-    }
-
-    close(file);
-    return 0;
-}
-
-    const char *device = "/dev/i2c-1";
-    int file = open(device, O_RDWR);
-    if (file < 0) {
-        std::cerr << "Failed to open the I2C bus\n";
-        return 1;
-    }
-
-    if (ioctl(file, I2C_SLAVE, BMP280_ADDRESS) < 0) {
-        std::cerr << "Failed to acquire bus access or talk to slave\n";
-        return 1;
-    }
-
-    // Configure the BMP280: set oversampling and mode
-    char config[2] = {REG_CONTROL, 0x27};  // Normal mode, oversampling x1
-    if (write(file, config, 2) != 2) {
-        std::cerr << "Failed to configure the BMP280\n";
-        return 1;
-    }
-
-    for (int i = 0; i < 10; i++) {
-        // Wait for measurement to complete
-        usleep(1000);
-
-        // Read pressure data
-        char reg = REG_PRESS_MSB;
-        if (write(file, &reg, 1) != 1) {
-            std::cerr << "Failed to set register pointer\n";
-            return 1;
-        }
-
-        char data[6];
-        if (read(file, data, 6) != 6) {
-            std::cerr << "Failed to read data from BMP280\n";
-            return 1;
-        }
-
-        // Combine data to calculate raw pressure
-        int rawPressure = ((int)data[0] << 12) | ((int)data[1] << 4) | ((data[2] >> 4) & 0x0F);
-
-        // Convert to hPa (you may need to refine based on calibration)
-        double pressure = rawPressure / 25600.0;
-
-        // Display the result
-        std::cout << "Relevé " << (i + 1) << ": Pression = " << pressure << " hPa" << std::endl;
-
-        // Pause 2 seconds before the next measurement
+        // Pause de 2 secondes avant la prochaine mesure
         sleep(2);
     }
 
