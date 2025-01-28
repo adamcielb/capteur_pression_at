@@ -51,11 +51,8 @@ int main() {
         // Combiner les données pour calculer la pression brute
         int rawPressure = ((int)data[0] << 12) | ((int)data[1] << 4) | ((data[2] >> 4) & 0x0F);
 
-        // Convertir en hPa (vous devrez peut-être affiner en fonction de la calibration)
-        double pressure = rawPressure / 25600.0;
-
-        // Afficher le résultat
-        std::cout << "Relevé " << (i + 1) << ": Pression = " << pressure << " hPa" << std::endl;
+        // Afficher le résultat brut en Pa
+        std::cout << "Relevé " << (i + 1) << ": Pression brute = " << rawPressure << " Pa" << std::endl;
 
         // Pause de 2 secondes avant la prochaine mesure
         sleep(2);
