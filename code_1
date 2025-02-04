@@ -61,3 +61,4 @@ int main() {
     close(file);
     return 0;
 }
+(g++ bmp280.cpp -o bmp280 -I/usr/local/include -L/usr/local/lib -lstdc++)
