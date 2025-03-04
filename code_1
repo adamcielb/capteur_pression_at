@@ -1,132 +1,21 @@
-#include <iostream>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <linux/i2c-dev.h>
+bmp280.cpp: In function ‘bool readCalibration(int)’:
+bmp280.cpp:8:19: error: lvalue required as unary ‘&’ operand
+    8 | #define REG_CALIB 0x88       // Registres de calibration
+      |                   ^~~~
+bmp280.cpp:26:22: note: in expansion of macro ‘REG_CALIB’
+   26 |     if (write(file, &REG_CALIB, 1) != 1 || read(file, data, 24) != 24)
+      |                      ^~~~~~~~~
+bmp280.cpp: In function ‘int main()’:
+bmp280.cpp:10:22: error: lvalue required as unary ‘&’ operand
+   10 | #define REG_TEMP_MSB 0xFA    // Registre de température brute
+      |                      ^~~~
+bmp280.cpp:106:26: note: in expansion of macro ‘REG_TEMP_MSB’
+  106 |         if (write(file, &REG_TEMP_MSB, 1) != 1 || read(file, data, 3) != 3) {
+      |                          ^~~~~~~~~~~~
+bmp280.cpp:9:23: error: lvalue required as unary ‘&’ operand
+    9 | #define REG_PRESS_MSB 0xF7   // Registre de pression brute
+      |                       ^~~~
+bmp280.cpp:116:26: note: in expansion of macro ‘REG_PRESS_MSB’
+  116 |         if (write(file, &REG_PRESS_MSB, 1) != 1 || read(file, data, 3) != 3) {
+      |                          ^~~~~~~~~~~~~
 
-#define BMP280_ADDRESS 0x76  // Adresse I2C du capteur
-#define REG_CALIB 0x88       // Registres de calibration
-#define REG_PRESS_MSB 0xF7   // Registre de pression brute
-#define REG_TEMP_MSB 0xFA    // Registre de température brute
-#define REG_CONTROL 0xF4     // Registre de configuration
-
-// Structures pour les coefficients de calibration
-struct BMP280_Calib {
-    uint16_t dig_T1;
-    int16_t dig_T2, dig_T3;
-    uint16_t dig_P1;
-    int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
-} calib;
-
-int32_t t_fine; // Température fine pour compensation
-
-// Fonction pour lire les coefficients de calibration
-bool readCalibration(int file) {
-    char data[24];
-    if (write(file, &REG_CALIB, 1) != 1 || read(file, data, 24) != 24)
-        return false;
-
-    calib.dig_T1 = (data[1] << 8) | data[0];
-    calib.dig_T2 = (data[3] << 8) | data[2];
-    calib.dig_T3 = (data[5] << 8) | data[4];
-    calib.dig_P1 = (data[7] << 8) | data[6];
-    calib.dig_P2 = (data[9] << 8) | data[8];
-    calib.dig_P3 = (data[11] << 8) | data[10];
-    calib.dig_P4 = (data[13] << 8) | data[12];
-    calib.dig_P5 = (data[15] << 8) | data[14];
-    calib.dig_P6 = (data[17] << 8) | data[16];
-    calib.dig_P7 = (data[19] << 8) | data[18];
-    calib.dig_P8 = (data[21] << 8) | data[20];
-    calib.dig_P9 = (data[23] << 8) | data[22];
-    return true;
-}
-
-// Fonction de compensation de la température
-int32_t bmp280_compensate_T_int32(int32_t adc_T) {
-    int32_t var1, var2;
-    var1 = ((((adc_T >> 3) - ((int32_t)calib.dig_T1 << 1))) * ((int32_t)calib.dig_T2)) >> 11;
-    var2 = (((((adc_T >> 4) - ((int32_t)calib.dig_T1)) * ((adc_T >> 4) - ((int32_t)calib.dig_T1))) >> 12) *
-            ((int32_t)calib.dig_T3)) >> 14;
-    t_fine = var1 + var2;
-    return (t_fine * 5 + 128) >> 8;  // Température en °C (résolution de 0.01°C)
-}
-
-// Fonction de compensation de la pression
-uint32_t bmp280_compensate_P_int64(int32_t adc_P) {
-    int64_t var1, var2, p;
-    var1 = ((int64_t)t_fine) - 128000;
-    var2 = var1 * var1 * (int64_t)calib.dig_P6;
-    var2 = var2 + ((var1 * (int64_t)calib.dig_P5) << 17);
-    var2 = var2 + (((int64_t)calib.dig_P4) << 35);
-    var1 = ((var1 * var1 * (int64_t)calib.dig_P3) >> 8) + ((var1 * (int64_t)calib.dig_P2) << 12);
-    var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)calib.dig_P1) >> 33;
-    if (var1 == 0) {
-        return 0;  // Protection contre la division par zéro
-    }
-    p = 1048576 - adc_P;
-    p = (((p << 31) - var2) * 3125) / var1;
-    var1 = (((int64_t)calib.dig_P9) * (p >> 13) * (p >> 13)) >> 25;
-    var2 = (((int64_t)calib.dig_P8) * p) >> 19;
-    p = ((p + var1 + var2) >> 8) + (((int64_t)calib.dig_P7) << 4);
-    return (uint32_t)(p >> 8);  // Pression en Pa (Q24.8 format)
-}
-
-int main() {
-    const char *device = "/dev/i2c-1";
-    int file = open(device, O_RDWR);
-    if (file < 0) {
-        std::cerr << "❌ Erreur : Impossible d'ouvrir le bus I2C\n";
-        return 1;
-    }
-
-    if (ioctl(file, I2C_SLAVE, BMP280_ADDRESS) < 0) {
-        std::cerr << "❌ Erreur : Impossible de communiquer avec le BMP280\n";
-        close(file);
-        return 1;
-    }
-
-    if (!readCalibration(file)) {
-        std::cerr << "❌ Erreur : Impossible de lire la calibration\n";
-        close(file);
-        return 1;
-    }
-
-    char config[2] = {REG_CONTROL, 0x27};  // Configuration du capteur pour température et pression
-    if (write(file, config, 2) != 2) {
-        std::cerr << "❌ Erreur : Échec de la configuration\n";
-        close(file);
-        return 1;
-    }
-
-    for (int i = 0; i < 15; i++) {
-        usleep(10000);  // Attente avant de lire les données
-
-        // Lire la température brute
-        char data[3];
-        if (write(file, &REG_TEMP_MSB, 1) != 1 || read(file, data, 3) != 3) {
-            std::cerr << "❌ Erreur : Lecture de la température impossible\n";
-            close(file);
-            return 1;
-        }
-
-        int32_t rawTemp = ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | ((data[2] >> 4) & 0x0F);
-        int32_t temp_C = bmp280_compensate_T_int32(rawTemp);
-
-        // Lire la pression brute
-        if (write(file, &REG_PRESS_MSB, 1) != 1 || read(file, data, 3) != 3) {
-            std::cerr << "❌ Erreur : Lecture de la pression impossible\n";
-            close(file);
-            return 1;
-        }
-
-        int32_t rawPressure = ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | ((data[2] >> 4) & 0x0F);
-        uint32_t pressure_Pa = bmp280_compensate_P_int64(rawPressure);
-        double pressure_hPa = pressure_Pa / 256.0;  // Convertir en hPa
-
-        std::cout << "📊 Relevé " << (i + 1) << " : Temp = " << temp_C / 100.0 << " °C, Pression = " << pressure_hPa << " hPa\n";
-        usleep(2000000);  // Attente de 2 secondes entre les mesures
-    }
-
-    close(file);
-    return 0;
-}
