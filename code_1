@@ -3,88 +3,65 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
+#include <cmath>
+#include <cstdint>
 
-#define BMP280_ADDRESS 0x76  // Adresse I2C du capteur
-#define REG_CALIB 0x88       // Registres de calibration
-#define REG_PRESS_MSB 0xF7   // Registre de pression brute
-#define REG_TEMP_MSB 0xFA    // Registre de température brute
-#define REG_CONTROL 0xF4     // Registre de configuration
+#define BMP280_ADDRESS 0x76
+#define REG_CONTROL 0xF4
+#define REG_PRESS_MSB 0xF7
+#define REG_CALIB 0x88  // Adresse de départ des coefficients de calibration
 
-// Structures pour les coefficients de calibration
-struct BMP280_Calib {
+// Structure pour stocker les coefficients de calibration
+struct BMP280_CalibData {
     uint16_t dig_T1;
     int16_t dig_T2, dig_T3;
     uint16_t dig_P1;
     int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
-} calib;
+};
 
-int32_t t_fine; // Température fine pour compensation
-
-// Fonction pour lire un mot de 16 bits
-uint16_t read16(int file, uint8_t reg) {
+// Fonction pour lire un mot (16 bits) depuis le BMP280
+int16_t read16(int file, uint8_t reg) {
     uint8_t data[2];
-    if (write(file, &reg, 1) != 1 || read(file, data, 2) != 2) {
-        std::cerr << "❌ Erreur lors de la lecture du registre 0x" << std::hex << (int)reg << std::dec << "\n";
-        return 0;
-    }
-    return (data[0] << 8) | data[1];
-}
-
-// Fonction pour lire 3 octets (MSB, LSB, XLSB)
-int32_t readRawData(int file, uint8_t reg) {
-    uint8_t data[3];
-    if (write(file, &reg, 1) != 1 || read(file, data, 3) != 3) {
-        std::cerr << "❌ Erreur lors de la lecture des données brutes\n";
-        return 0;
-    }
-    return ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | ((data[2] >> 4) & 0x0F);
+    write(file, &reg, 1);
+    read(file, data, 2);
+    return (data[1] << 8) | data[0];
 }
 
 // Fonction pour lire les coefficients de calibration
-bool readCalibration(int file) {
-    calib.dig_T1 = read16(file, REG_CALIB);
-    calib.dig_T2 = (int16_t)read16(file, REG_CALIB + 2);  // Les coefficients sont stockés à partir de REG_CALIB + 2
-    calib.dig_T3 = (int16_t)read16(file, REG_CALIB + 4);
-    calib.dig_P1 = read16(file, REG_CALIB + 6);
-    calib.dig_P2 = (int16_t)read16(file, REG_CALIB + 8);
-    calib.dig_P3 = (int16_t)read16(file, REG_CALIB + 10);
-    calib.dig_P4 = (int16_t)read16(file, REG_CALIB + 12);
-    calib.dig_P5 = (int16_t)read16(file, REG_CALIB + 14);
-    calib.dig_P6 = (int16_t)read16(file, REG_CALIB + 16);
-    calib.dig_P7 = (int16_t)read16(file, REG_CALIB + 18);
-    calib.dig_P8 = (int16_t)read16(file, REG_CALIB + 20);
-    calib.dig_P9 = (int16_t)read16(file, REG_CALIB + 22);
-    return true;
+void readCalibrationData(int file, BMP280_CalibData &calib) {
+    calib.dig_T1 = read16(file, 0x88);
+    calib.dig_T2 = read16(file, 0x8A);
+    calib.dig_T3 = read16(file, 0x8C);
+    calib.dig_P1 = read16(file, 0x8E);
+    calib.dig_P2 = read16(file, 0x90);
+    calib.dig_P3 = read16(file, 0x92);
+    calib.dig_P4 = read16(file, 0x94);
+    calib.dig_P5 = read16(file, 0x96);
+    calib.dig_P6 = read16(file, 0x98);
+    calib.dig_P7 = read16(file, 0x9A);
+    calib.dig_P8 = read16(file, 0x9C);
+    calib.dig_P9 = read16(file, 0x9E);
 }
 
-// Fonction de compensation de la température
-int32_t bmp280_compensate_T_int32(int32_t adc_T) {
-    int32_t var1, var2;
-    var1 = ((((adc_T >> 3) - ((int32_t)calib.dig_T1 << 1))) * ((int32_t)calib.dig_T2)) >> 11;
-    var2 = (((((adc_T >> 4) - ((int32_t)calib.dig_T1)) * ((adc_T >> 4) - ((int32_t)calib.dig_T1))) >> 12) *
-            ((int32_t)calib.dig_T3)) >> 14;
-    t_fine = var1 + var2;
-    return (t_fine * 5 + 128) >> 8;  // Température en °C (résolution de 0.01°C)
-}
+// Fonction de compensation de la pression selon la datasheet
+double compensatePressure(int32_t adc_P, int32_t t_fine, BMP280_CalibData &calib) {
+    double var1, var2, p;
+    var1 = ((double)t_fine / 2.0) - 64000.0;
+    var2 = var1 * var1 * ((double)calib.dig_P6) / 32768.0;
+    var2 = var2 + var1 * ((double)calib.dig_P5) * 2.0;
+    var2 = (var2 / 4.0) + (((double)calib.dig_P4) * 65536.0);
+    var1 = (((double)calib.dig_P3) * var1 * var1 / 524288.0 + ((double)calib.dig_P2) * var1) / 524288.0;
+    var1 = (1.0 + var1 / 32768.0) * ((double)calib.dig_P1);
 
-// Fonction de compensation de la pression
-uint32_t bmp280_compensate_P_int64(int32_t adc_P) {
-    int64_t var1, var2, p;
-    var1 = ((int64_t)t_fine) - 128000;
-    var2 = var1 * var1 * (int64_t)calib.dig_P6;
-    var2 = var2 + ((var1 * (int64_t)calib.dig_P5) << 17);
-    var2 = var2 + (((int64_t)calib.dig_P4) << 35);
-    var1 = ((var1 * var1 * (int64_t)calib.dig_P3) >> 8) + ((var1 * (int64_t)calib.dig_P2) << 12);
-    var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)calib.dig_P1) >> 33;
-    if (var1 == 0) {
-        return 0;  // Protection contre la division par zéro
-    }
-    p = 1048576 - adc_P;
-    p = (((p << 31) - var2) * 3125) / var1;
-    var1 = (((int64_t)calib.dig_P9) * (p >> 13) * (p >> 13)) >> 25;
-    var2 = (((int64_t)calib.dig_P8) * p) >> 19;
-    p = ((p + var1 + var2) >> 8) + (((int64_t)calib.dig_P7) << 4);
-    return (uint32_t)(p >> 8);  // Pression en Pa (Q24.8 format)
+    if (var1 == 0.0) return 0; // éviter la division par zéro
+
+    p = 1048576.0 - (double)adc_P;
+    p = (p - (var2 / 4096.0)) * 6250.0 / var1;
+    var1 = ((double)calib.dig_P9) * p * p / 2147483648.0;
+    var2 = p * ((double)calib.dig_P8) / 32768.0;
+    p = p + (var1 + var2 + ((double)calib.dig_P7)) / 16.0;
+
+    return p / 100.0; // Conversion en hPa
 }
 
 int main() {
@@ -101,34 +78,47 @@ int main() {
         return 1;
     }
 
-    if (!readCalibration(file)) {
-        std::cerr << "❌ Erreur : Impossible de lire la calibration\n";
-        close(file);
-        return 1;
-    }
+    // Lire les coefficients de calibration
+    BMP280_CalibData calib;
+    readCalibrationData(file, calib);
 
-    // Configuration du capteur pour température et pression
-    char config[2] = {REG_CONTROL, 0x27};
+    // Configurer le BMP280 : mode normal, oversampling x4
+    char config[2] = {REG_CONTROL, 0x57};  
     if (write(file, config, 2) != 2) {
-        std::cerr << "❌ Erreur : Échec de la configuration\n";
+        std::cerr << "❌ Erreur : Échec de la configuration du BMP280\n";
         close(file);
         return 1;
     }
 
-    for (int i = 0; i < 15; i++) {
-        usleep(10000);  // Attente avant de lire les données
+    // Variable pour le nombre de relevés
+    int nombreReleves = 15;
 
-        // Lire les données brutes de température
-        int32_t rawTemp = readRawData(file, REG_TEMP_MSB);
-        int32_t temp_C = bmp280_compensate_T_int32(rawTemp);
+    for (int i = 0; i < nombreReleves; i++) {
+        usleep(10000);  // Pause pour laisser le capteur effectuer une mesure
 
-        // Lire les données brutes de pression
-        int32_t rawPressure = readRawData(file, REG_PRESS_MSB);
-        uint32_t pressure_Pa = bmp280_compensate_P_int64(rawPressure);
-        double pressure_hPa = pressure_Pa / 256.0;  // Convertir en hPa
+        // Lire les données de pression
+        char reg = REG_PRESS_MSB;
+        char data[3];
 
-        std::cout << "📊 Relevé " << (i + 1) << " : Temp = " << temp_C / 100.0 << " °C, Pression = " << pressure_hPa << " hPa\n";
-        usleep(2000000);  // Attente de 2 secondes entre les mesures
+        if (write(file, &reg, 1) != 1 || read(file, data, 3) != 3) {
+            std::cerr << "❌ Erreur : Lecture des données impossible\n";
+            close(file);
+            return 1;
+        }
+
+        // Extraire la valeur brute de pression (20 bits)
+        int32_t rawPressure = ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | ((data[2] >> 4) & 0x0F);
+
+        // Simulation de t_fine (normalement issu de la compensation de température)
+        int32_t t_fine = 10000; // Remplacez par la vraie valeur de compensation si disponible
+
+        // Appliquer la compensation
+        double pressure_hPa = compensatePressure(rawPressure, t_fine, calib);
+
+        // Afficher le résultat
+        std::cout << "📊 Relevé " << (i + 1) << " : Pression = " << pressure_hPa << " hPa" << std::endl;
+
+        sleep(2);  // Pause avant la prochaine mesure
     }
 
     close(file);
