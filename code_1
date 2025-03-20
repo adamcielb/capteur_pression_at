@@ -6,11 +6,15 @@
 #include <cmath>
 #include <cstdint>
 
+// Adresse I2C du BMP280 (selon la datasheet de Bosch)
 #define BMP280_ADDRESS 0x76
-#define REG_CONTROL 0xF4
-#define REG_PRESS_MSB 0xF7
-#define REG_CALIB 0x88  // Adresse de départ des coefficients de calibration
 
+// Adresses des registres du BMP280
+#define REG_CONTROL 0xF4    // Contrôle de la mesure
+#define REG_PRESS_MSB 0xF7  // Registre MSB pour la pression
+#define REG_CALIB 0x88      // Adresse de début pour les coefficients de calibration
+
+// Structure pour stocker les coefficients de calibration du BMP280
 struct BMP280_CalibData {
     uint16_t dig_T1;
     int16_t dig_T2, dig_T3;
@@ -18,30 +22,35 @@ struct BMP280_CalibData {
     int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
 };
 
+// Fonction pour lire 2 octets de données depuis un registre I2C
 int16_t read16(int file, uint8_t reg) {
     uint8_t data[2];
-    write(file, &reg, 1);
-    read(file, data, 2);
-    return (data[1] << 8) | data[0];
+    write(file, &reg, 1);  // Envoi de l'adresse du registre
+    read(file, data, 2);   // Lecture de 2 octets de données
+    return (data[1] << 8) | data[0];  // Retour des données lues sous forme de nombre 16 bits
 }
 
+// Fonction pour lire les coefficients de calibration à partir du capteur
 void readCalibrationData(int file, BMP280_CalibData &calib) {
-    calib.dig_T1 = read16(file, 0x88);
-    calib.dig_T2 = read16(file, 0x8A);
-    calib.dig_T3 = read16(file, 0x8C);
-    calib.dig_P1 = read16(file, 0x8E);
-    calib.dig_P2 = read16(file, 0x90);
-    calib.dig_P3 = read16(file, 0x92);
-    calib.dig_P4 = read16(file, 0x94);
-    calib.dig_P5 = read16(file, 0x96);
-    calib.dig_P6 = read16(file, 0x98);
-    calib.dig_P7 = read16(file, 0x9A);
-    calib.dig_P8 = read16(file, 0x9C);
-    calib.dig_P9 = read16(file, 0x9E);
+    calib.dig_T1 = read16(file, 0x88);  // Lecture du coefficient T1
+    calib.dig_T2 = read16(file, 0x8A);  // Lecture du coefficient T2
+    calib.dig_T3 = read16(file, 0x8C);  // Lecture du coefficient T3
+    calib.dig_P1 = read16(file, 0x8E);  // Lecture du coefficient P1
+    calib.dig_P2 = read16(file, 0x90);  // Lecture du coefficient P2
+    calib.dig_P3 = read16(file, 0x92);  // Lecture du coefficient P3
+    calib.dig_P4 = read16(file, 0x94);  // Lecture du coefficient P4
+    calib.dig_P5 = read16(file, 0x96);  // Lecture du coefficient P5
+    calib.dig_P6 = read16(file, 0x98);  // Lecture du coefficient P6
+    calib.dig_P7 = read16(file, 0x9A);  // Lecture du coefficient P7
+    calib.dig_P8 = read16(file, 0x9C);  // Lecture du coefficient P8
+    calib.dig_P9 = read16(file, 0x9E);  // Lecture du coefficient P9
 }
 
+// Fonction de compensation de la pression en fonction des données brutes et des coefficients de calibration
 double compensatePressure(int32_t adc_P, int32_t t_fine, BMP280_CalibData &calib) {
     double var1, var2, p;
+    
+    // Calcul de var1, var2 selon les équations de la datasheet
     var1 = ((double)t_fine / 2.0) - 64000.0;
     var2 = var1 * var1 * ((double)calib.dig_P6) / 32768.0;
     var2 = var2 + var1 * ((double)calib.dig_P5) * 2.0;
@@ -49,18 +58,21 @@ double compensatePressure(int32_t adc_P, int32_t t_fine, BMP280_CalibData &calib
     var1 = (((double)calib.dig_P3) * var1 * var1 / 524288.0 + ((double)calib.dig_P2) * var1) / 524288.0;
     var1 = (1.0 + var1 / 32768.0) * ((double)calib.dig_P1);
 
-    if (var1 == 0.0) return 0; // éviter la division par zéro
+    // Éviter la division par zéro
+    if (var1 == 0.0) return 0; 
 
+    // Calcul de la pression compensée en hPa
     p = 1048576.0 - (double)adc_P;
     p = (p - (var2 / 4096.0)) * 6250.0 / var1;
     var1 = ((double)calib.dig_P9) * p * p / 2147483648.0;
     var2 = p * ((double)calib.dig_P8) / 32768.0;
     p = p + (var1 + var2 + ((double)calib.dig_P7)) / 16.0;
 
-    return p / 100.0; // Conversion en hPa
+    return p / 100.0; // Conversion de la pression en hPa
 }
 
 int main() {
+    // Chemin d'accès au périphérique I2C sur le Raspberry Pi ou autre plateforme
     const char *device = "/dev/i2c-1";
     int file = open(device, O_RDWR);
     if (file < 0) {
@@ -68,17 +80,18 @@ int main() {
         return 1;
     }
 
+    // Configuration de l'adresse du périphérique BMP280
     if (ioctl(file, I2C_SLAVE, BMP280_ADDRESS) < 0) {
         std::cerr << "❌ Erreur : Impossible de communiquer avec le BMP280\n";
         close(file);
         return 1;
     }
 
-    // Lire les coefficients de calibration
+    // Lecture des coefficients de calibration à partir du capteur
     BMP280_CalibData calib;
     readCalibrationData(file, calib);
 
-    // ✅ Configuration correcte avec un oversampling x4 pour la température et la pression
+    // Configuration du BMP280 avec un oversampling x4 pour température et pression (selon la datasheet)
     char config[2] = {REG_CONTROL, 0x2F};  
     if (write(file, config, 2) != 2) {
         std::cerr << "❌ Erreur : Échec de la configuration du BMP280\n";
@@ -86,11 +99,12 @@ int main() {
         return 1;
     }
 
-    int nombreReleves = 15;
+    int nombreReleves = 15; // Nombre de relevés à effectuer
 
     for (int i = 0; i < nombreReleves; i++) {
-        usleep(10000);  // Pause pour laisser le capteur effectuer une mesure
+        usleep(10000);  // Attente pour permettre au capteur de prendre une nouvelle mesure
 
+        // Lecture des données de pression
         char reg = REG_PRESS_MSB;
         char data[3];
 
@@ -100,17 +114,18 @@ int main() {
             return 1;
         }
 
+        // Conversion des données brutes de pression (selon la datasheet)
         int32_t rawPressure = ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | ((data[2] >> 4) & 0x0F);
-        int32_t t_fine = 10000; // Simulation de la compensation température
+        int32_t t_fine = 10000; // Température simulée pour la compensation (la véritable température doit être lue et calculée)
 
+        // Calcul de la pression compensée et affichage du résultat
         double pressure_hPa = compensatePressure(rawPressure, t_fine, calib);
 
         std::cout << "📊 Relevé " << (i + 1) << " : Pression = " << pressure_hPa << " hPa" << std::endl;
 
-        sleep(2);  // Pause avant la prochaine mesure
+        sleep(2);  // Pause avant le prochain relevé
     }
 
-    close(file);
+    close(file); // Fermeture du fichier I2C
     return 0;
 }
-
